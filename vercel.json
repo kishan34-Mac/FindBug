@@ -6,7 +6,9 @@
         },
         "backend": {
             "root": "backend",
-            "routePrefix": "/_/backend"
+            "routePrefix": "/_/backend",
+            "builder": "@vercel/node",
+            "entrypoint": "server.js"
         }
     }
 }
