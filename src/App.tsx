@@ -98,8 +98,8 @@ function App() {
           });
         }, 800);
 
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-        const response = await fetch(\`\${apiUrl}/api/audit\`, {
+        const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/_/backend' : 'http://localhost:5001');
+        const response = await fetch(`${apiUrl}/api/audit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url })
