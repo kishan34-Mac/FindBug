@@ -130,9 +130,9 @@ function App() {
           setAppState('results');
         }, 600);
 
-      } catch (error) {
+      } catch (error: any) {
         console.error('Audit error:', error);
-        alert('Failed to generate audit report.');
+        alert(`Error: ${error.message || 'Failed to generate audit report.'}`);
         setAppState('input');
       }
     };
