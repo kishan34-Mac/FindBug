@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "postinstall": "cd backend && npm install",
+    "postinstall": "cd backend && npm install && npx playwright install chromium",
     "start": "cd backend && npm start",
     "dev": "vite",
     "build": "vite build",

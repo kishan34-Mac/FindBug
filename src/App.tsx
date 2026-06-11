@@ -109,7 +109,7 @@ function App() {
         clearInterval(progressInterval);
         
         if (!response.ok) {
-          throw new Error(data.error || 'Audit failed');
+          throw new Error(data.details || data.error || 'Audit failed');
         }
 
         const addIds = (arr: any[]) => arr.map((item, i) => ({ ...item, id: i + 1, title: item.issue, description: item.description || 'No description provided' }));

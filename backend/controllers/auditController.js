@@ -116,6 +116,6 @@ exports.runAudit = async (req, res) => {
     if (browser) {
       await browser.close().catch(() => {});
     }
-    res.status(500).json({ error: 'An error occurred during the audit process.' });
+    res.status(500).json({ error: 'An error occurred during the audit process.', details: error.message });
   }
 };
