@@ -16,6 +16,7 @@ import {
   Smartphone,
   Zap,
   ChevronRight,
+  Eye,
 } from 'lucide-react';
 
 type AppState = 'input' | 'loading' | 'results';
@@ -57,6 +58,8 @@ const dummyIssues: Record<string, Issue[]> = {
   functional: [],
   responsive: [],
   performance: [],
+  seo: [],
+  accessibility: [],
 };
 
 function App() {
@@ -93,6 +96,8 @@ function App() {
     if (appState !== 'loading') return;
 
     let pollInterval: NodeJS.Timeout;
+    const startTime = Date.now();
+    const clientTimeoutLimit = 5 * 60 * 1000; // 5 minutes client timeout
 
     const runPipeline = async () => {
       try {
@@ -116,6 +121,12 @@ function App() {
         // Step 2: Poll status
         pollInterval = setInterval(async () => {
           try {
+            // Check client timeout limit
+            if (Date.now() - startTime > clientTimeoutLimit) {
+              clearInterval(pollInterval);
+              throw new Error('Audit timed out.');
+            }
+
             const statusResponse = await fetch(`${apiUrl}/api/audit/status/${jobId}`);
             const statusData = await statusResponse.json();
 
@@ -164,7 +175,9 @@ function App() {
                 backend: addIds(report.backendIssues || []),
                 functional: addIds(report.functionalBugs || []),
                 responsive: addIds(report.responsivenessIssues || []),
-                performance: addIds(report.performanceIssues || [])
+                performance: addIds(report.performanceIssues || []),
+                seo: addIds(report.seoIssues || []),
+                accessibility: addIds(report.accessibilityIssues || [])
               });
 
               setScreenshot(report.screenshot || null);
@@ -180,6 +193,9 @@ function App() {
             } else if (statusData.status === 'FAILED') {
               clearInterval(pollInterval);
               throw new Error(statusData.error || 'Audit job failed on the backend');
+            } else if (statusData.status === 'TIMED_OUT') {
+              clearInterval(pollInterval);
+              throw new Error(statusData.error || 'Audit job timed out on the backend');
             }
           } catch (pollErr) {
             const err = pollErr as Error;
@@ -221,6 +237,8 @@ function App() {
     { title: 'Functional Bugs', icon: <Bug className="w-5 h-5" />, iconColor: 'text-purple-600', bgColor: 'bg-purple-100', issues: issues.functional },
     { title: 'Responsiveness Issues', icon: <Smartphone className="w-5 h-5" />, iconColor: 'text-cyan-600', bgColor: 'bg-cyan-100', issues: issues.responsive },
     { title: 'Performance Issues', icon: <Zap className="w-5 h-5" />, iconColor: 'text-amber-600', bgColor: 'bg-amber-100', issues: issues.performance },
+    { title: 'SEO Issues', icon: <Search className="w-5 h-5" />, iconColor: 'text-rose-600', bgColor: 'bg-rose-100', issues: issues.seo },
+    { title: 'Accessibility Issues', icon: <Eye className="w-5 h-5" />, iconColor: 'text-sky-600', bgColor: 'bg-sky-100', issues: issues.accessibility },
   ];
 
   const totalIssues = categories.reduce((sum, cat) => sum + cat.issues.length, 0);

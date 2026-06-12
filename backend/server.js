@@ -24,7 +24,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const requestTracing = require('./middleware/tracing');
-const { resumeJobs } = require('./utils/queue');
+const { resumeJobs, cleanupStuckJobs } = require('./utils/queue');
 const auditRoutes = require('./routes/audit');
 
 const app = express();
@@ -92,6 +92,11 @@ mongoose.connect(process.env.MONGODB_URI)
     }).catch(err => {
       console.error('Failed to initialize queue resumption:', err);
     });
+
+    // Start background cleaner task checking every 2 minutes
+    setInterval(() => {
+      cleanupStuckJobs().catch(err => console.error('Background stuck jobs cleanup failed:', err));
+    }, 2 * 60 * 1000);
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

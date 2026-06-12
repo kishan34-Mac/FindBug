@@ -19,6 +19,8 @@ const AuditReportSchema = new mongoose.Schema({
   functionalBugs: [IssueSchema],
   responsivenessIssues: [IssueSchema],
   performanceIssues: [IssueSchema],
+  seoIssues: [IssueSchema],
+  accessibilityIssues: [IssueSchema],
   screenshot: { type: String },
   performanceMetrics: {
     dnsLookupTime: { type: Number, default: 0 },

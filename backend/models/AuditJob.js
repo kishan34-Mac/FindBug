@@ -4,7 +4,7 @@ const AuditJobSchema = new mongoose.Schema({
   targetUrl: { type: String, required: true },
   status: {
     type: String,
-    enum: ['PENDING', 'RUNNING', 'COMPLETED', 'FAILED'],
+    enum: ['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'TIMED_OUT'],
     default: 'PENDING'
   },
   attempts: { type: Number, default: 0 },

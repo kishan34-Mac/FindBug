@@ -19,37 +19,70 @@ async function processQueue() {
 
       console.log(`[Queue] Processing job ${job._id} for URL: ${job.targetUrl}`);
       try {
-        job.attempts += 1;
-        await job.save();
+        // Increment attempts atomically
+        await AuditJob.updateOne(
+          { _id: job._id },
+          { $inc: { attempts: 1 }, $set: { updatedAt: new Date() } }
+        );
+        
+        // Fetch fresh job details for tracking attempts count
+        const updatedJob = await AuditJob.findById(job._id);
 
         const report = await executeAudit(job.targetUrl, async (progress) => {
-          job.progress = progress;
-          job.updatedAt = new Date();
-          await job.save().catch(err => console.error('[Queue] Error updating job progress:', err));
+          await AuditJob.updateOne(
+            { _id: job._id },
+            { $set: { progress, updatedAt: new Date() } }
+          ).catch(err => console.error('[Queue] Error updating job progress:', err));
         });
 
-        job.status = 'COMPLETED';
-        job.reportId = report._id;
-        job.progress = 100;
-        job.error = undefined;
-        job.updatedAt = new Date();
-        await job.save();
+        await AuditJob.updateOne(
+          { _id: job._id },
+          {
+            $set: {
+              status: 'COMPLETED',
+              reportId: report._id,
+              progress: 100,
+              updatedAt: new Date()
+            },
+            $unset: { error: "" }
+          }
+        );
         console.log(`[Queue] Job ${job._id} completed successfully.`);
       } catch (err) {
         console.error(`[Queue] Job ${job._id} failed:`, err);
-        job.error = err.message || 'Unknown error occurred';
+        const errorMessage = err.message || 'Unknown error occurred';
 
-        if (job.attempts < job.maxAttempts) {
-          job.status = 'PENDING';
-          job.progress = 0;
-          console.log(`[Queue] Job ${job._id} rescheduled for retry (${job.attempts}/${job.maxAttempts}).`);
+        const freshJob = await AuditJob.findById(job._id);
+        const attempts = freshJob ? freshJob.attempts : job.attempts;
+        const maxAttempts = freshJob ? freshJob.maxAttempts : job.maxAttempts;
+
+        if (attempts < maxAttempts) {
+          await AuditJob.updateOne(
+            { _id: job._id },
+            {
+              $set: {
+                status: 'PENDING',
+                progress: 0,
+                error: errorMessage,
+                updatedAt: new Date()
+              }
+            }
+          );
+          console.log(`[Queue] Job ${job._id} rescheduled for retry (${attempts}/${maxAttempts}).`);
         } else {
-          job.status = 'FAILED';
-          job.progress = 0;
+          await AuditJob.updateOne(
+            { _id: job._id },
+            {
+              $set: {
+                status: 'FAILED',
+                progress: 0,
+                error: errorMessage,
+                updatedAt: new Date()
+              }
+            }
+          );
           console.log(`[Queue] Job ${job._id} marked as FAILED.`);
         }
-        job.updatedAt = new Date();
-        await job.save();
       }
     }
   } catch (err) {
@@ -86,8 +119,24 @@ async function resumeJobs() {
   }
 }
 
+async function cleanupStuckJobs() {
+  try {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    const res = await AuditJob.updateMany(
+      { status: 'RUNNING', updatedAt: { $lt: fifteenMinutesAgo } },
+      { status: 'TIMED_OUT', error: 'Job timed out after 15 minutes of inactivity' }
+    );
+    if (res.modifiedCount > 0) {
+      console.log(`[Queue] Automatically cleaned up and marked ${res.modifiedCount} stuck running jobs as TIMED_OUT.`);
+    }
+  } catch (err) {
+    console.error('[Queue] Error during automatic stuck jobs cleanup:', err);
+  }
+}
+
 module.exports = {
   addJob,
   processQueue,
-  resumeJobs
+  resumeJobs,
+  cleanupStuckJobs
 };
