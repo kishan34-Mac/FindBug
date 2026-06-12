@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "postinstall": "npx playwright install chromium",
+    "postinstall": "PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium",
     "dev": "node --watch server.js",
-    "start": "node server.js",
+    "start": "PLAYWRIGHT_BROWSERS_PATH=0 node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

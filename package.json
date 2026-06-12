@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "postinstall": "cd backend && npm install && npx playwright install chromium",
-    "start": "cd backend && npm start",
+    "postinstall": "cd backend && npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium",
+    "start": "cd backend && PLAYWRIGHT_BROWSERS_PATH=0 npm start",
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
