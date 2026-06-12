@@ -28,6 +28,18 @@ interface Issue {
   title: string;
   severity: Severity;
   description: string;
+  exactPageUrl: string;
+  evidence: string;
+  screenshot?: string;
+  networkLog?: string;
+  domSelector?: string;
+  consoleError?: string;
+  apiResponse?: string;
+  reproducible: string;
+  confidence: number;
+  reproductionSteps: string;
+  recommendedFix: string;
+  observationOnly: boolean;
 }
 
 interface IssueCategory {
@@ -162,6 +174,18 @@ function App() {
                 issue: string;
                 description: string;
                 severity: Severity;
+                exactPageUrl: string;
+                evidence: string;
+                screenshot?: string;
+                networkLog?: string;
+                domSelector?: string;
+                consoleError?: string;
+                apiResponse?: string;
+                reproducible: string;
+                confidence: number;
+                reproductionSteps: string;
+                recommendedFix: string;
+                observationOnly: boolean;
               }
               const addIds = (arr: RawIssue[]) => arr.map((item, i) => ({
                 ...item,
@@ -232,13 +256,13 @@ function App() {
   };
 
   const categories: IssueCategory[] = [
-    { title: 'Frontend Issues', icon: <Monitor className="w-5 h-5" />, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-100', issues: issues.frontend },
-    { title: 'Backend Issues', icon: <Server className="w-5 h-5" />, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-100', issues: issues.backend },
-    { title: 'Functional Bugs', icon: <Bug className="w-5 h-5" />, iconColor: 'text-purple-600', bgColor: 'bg-purple-100', issues: issues.functional },
-    { title: 'Responsiveness Issues', icon: <Smartphone className="w-5 h-5" />, iconColor: 'text-cyan-600', bgColor: 'bg-cyan-100', issues: issues.responsive },
-    { title: 'Performance Issues', icon: <Zap className="w-5 h-5" />, iconColor: 'text-amber-600', bgColor: 'bg-amber-100', issues: issues.performance },
-    { title: 'SEO Issues', icon: <Search className="w-5 h-5" />, iconColor: 'text-rose-600', bgColor: 'bg-rose-100', issues: issues.seo },
-    { title: 'Accessibility Issues', icon: <Eye className="w-5 h-5" />, iconColor: 'text-sky-600', bgColor: 'bg-sky-100', issues: issues.accessibility },
+    { title: 'Frontend Issues', icon: <Monitor className="w-5 h-5" />, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-100', issues: issues.frontend.filter(i => !i.observationOnly) },
+    { title: 'Backend Issues', icon: <Server className="w-5 h-5" />, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-100', issues: issues.backend.filter(i => !i.observationOnly) },
+    { title: 'Functional Bugs', icon: <Bug className="w-5 h-5" />, iconColor: 'text-purple-600', bgColor: 'bg-purple-100', issues: issues.functional.filter(i => !i.observationOnly) },
+    { title: 'Responsiveness Issues', icon: <Smartphone className="w-5 h-5" />, iconColor: 'text-cyan-600', bgColor: 'bg-cyan-100', issues: issues.responsive.filter(i => !i.observationOnly) },
+    { title: 'Performance Issues', icon: <Zap className="w-5 h-5" />, iconColor: 'text-amber-600', bgColor: 'bg-amber-100', issues: issues.performance.filter(i => !i.observationOnly) },
+    { title: 'SEO Issues', icon: <Search className="w-5 h-5" />, iconColor: 'text-rose-600', bgColor: 'bg-rose-100', issues: issues.seo.filter(i => !i.observationOnly) },
+    { title: 'Accessibility Issues', icon: <Eye className="w-5 h-5" />, iconColor: 'text-sky-600', bgColor: 'bg-sky-100', issues: issues.accessibility.filter(i => !i.observationOnly) },
   ];
 
   const totalIssues = categories.reduce((sum, cat) => sum + cat.issues.length, 0);
@@ -250,6 +274,16 @@ function App() {
     (sum, cat) => sum + cat.issues.filter((i) => i.severity === 'High').length,
     0
   );
+
+  const observations: Issue[] = [
+    ...issues.frontend.filter(i => i.observationOnly),
+    ...issues.backend.filter(i => i.observationOnly),
+    ...issues.functional.filter(i => i.observationOnly),
+    ...issues.responsive.filter(i => i.observationOnly),
+    ...issues.performance.filter(i => i.observationOnly),
+    ...issues.seo.filter(i => i.observationOnly),
+    ...issues.accessibility.filter(i => i.observationOnly),
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
@@ -583,23 +617,177 @@ function App() {
                         </div>
                         <ul className="space-y-4">
                           {category.issues.map(issue => (
-                            <li key={issue.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <li key={issue.id} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
                               <div className="flex items-center justify-between mb-2">
-                                <span className="font-semibold text-slate-900">{issue.title}</span>
-                                <span className={"px-2 py-1 text-xs font-medium rounded-full " + severityColors[issue.severity].badge}>
-                                  {issue.severity}
-                                </span>
+                                <span className="font-bold text-slate-900 text-base">{issue.title}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="px-2 py-0.5 text-xs font-semibold bg-indigo-100 text-indigo-700 rounded-full">
+                                    Confidence: {issue.confidence}%
+                                  </span>
+                                  <span className={"px-2.5 py-0.5 text-xs font-semibold rounded-full " + severityColors[issue.severity].badge}>
+                                    {issue.severity}
+                                  </span>
+                                </div>
                               </div>
-                              <p className="text-sm text-slate-600 leading-relaxed">{issue.description}</p>
+                              <p className="text-sm text-slate-700 leading-relaxed mb-1">{issue.description}</p>
+                              <p className="text-xs text-slate-500 mb-3"><span className="font-semibold">Detected at:</span> {issue.exactPageUrl}</p>
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 pt-3 border-t border-slate-100 text-xs">
+                                <div>
+                                  <p className="font-semibold text-slate-500 uppercase tracking-wider mb-1">Evidence / Proof</p>
+                                  <pre className="bg-slate-100 p-2.5 rounded border border-slate-200 text-slate-800 overflow-x-auto font-mono whitespace-pre-wrap">
+                                    {issue.evidence}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-slate-500 uppercase tracking-wider mb-1">Reproduction Steps</p>
+                                  <p className="text-slate-600 whitespace-pre-line bg-slate-100 p-2.5 rounded border border-slate-200">{issue.reproductionSteps}</p>
+                                </div>
+                              </div>
+
+                              {(issue.consoleError || issue.networkLog || issue.domSelector || issue.apiResponse) && (
+                                <div className="mt-3 pt-3 border-t border-slate-100 text-xs">
+                                  <p className="font-semibold text-slate-500 uppercase tracking-wider mb-2">Telemetry Logs & Proof Details</p>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {issue.consoleError && (
+                                      <div>
+                                        <p className="font-medium text-slate-600 mb-1">Console Logs / Runtime Stack</p>
+                                        <pre className="bg-red-50/50 text-red-700 p-2.5 rounded border border-red-100 overflow-x-auto font-mono whitespace-pre-wrap">
+                                          {issue.consoleError}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {issue.networkLog && (
+                                      <div>
+                                        <p className="font-medium text-slate-600 mb-1">Network Transmission Log</p>
+                                        <pre className="bg-slate-100 p-2.5 rounded border border-slate-200 overflow-x-auto font-mono whitespace-pre-wrap">
+                                          {issue.networkLog}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {issue.domSelector && (
+                                      <div>
+                                        <p className="font-medium text-slate-600 mb-1">DOM Selector / Element Code</p>
+                                        <pre className="bg-blue-50/50 text-blue-700 p-2.5 rounded border border-blue-100 overflow-x-auto font-mono whitespace-pre-wrap">
+                                          {issue.domSelector}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {issue.apiResponse && (
+                                      <div>
+                                        <p className="font-medium text-slate-600 mb-1">API Payload Response</p>
+                                        <pre className="bg-slate-100 p-2.5 rounded border border-slate-200 overflow-x-auto font-mono whitespace-pre-wrap">
+                                          {issue.apiResponse}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              <div className="mt-3 pt-3 border-t border-slate-100 text-xs">
+                                <p className="font-semibold text-emerald-600 uppercase tracking-wider mb-1">Recommended Fix</p>
+                                <p className="text-slate-700 bg-emerald-50/50 p-2.5 rounded border border-emerald-100">{issue.recommendedFix}</p>
+                              </div>
                             </li>
                           ))}
                         </ul>
                       </div>
                     );
                   })}
-                  {totalIssues === 0 && (
+                  
+                  {/* Observations Section */}
+                  {observations.length > 0 && (
+                    <div className="mt-8 pt-8 border-t-2 border-slate-200 border-dashed">
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className="text-amber-600">
+                          <AlertCircle className="w-5 h-5" />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-900">Observations Requiring Manual Verification</h3>
+                      </div>
+                      <ul className="space-y-4">
+                        {observations.map((issue, idx) => (
+                          <li key={idx} className="bg-amber-50/10 p-5 rounded-xl border border-amber-200/50">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-bold text-slate-900 text-base">{issue.title}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 text-xs font-semibold bg-amber-100 text-amber-700 rounded-full">
+                                  Confidence: {issue.confidence}%
+                                </span>
+                                <span className={"px-2.5 py-0.5 text-xs font-semibold rounded-full " + severityColors[issue.severity].badge}>
+                                  {issue.severity}
+                                </span>
+                              </div>
+                            </div>
+                            <p className="text-sm text-slate-700 leading-relaxed mb-1">{issue.description}</p>
+                            <p className="text-xs text-slate-500 mb-3"><span className="font-semibold">Detected at:</span> {issue.exactPageUrl}</p>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 pt-3 border-t border-amber-100/50 text-xs">
+                              <div>
+                                <p className="font-semibold text-amber-600/80 uppercase tracking-wider mb-1">Unverified Evidence</p>
+                                <pre className="bg-amber-50/30 p-2.5 rounded border border-amber-200/30 text-slate-800 overflow-x-auto font-mono whitespace-pre-wrap">
+                                  {issue.evidence}
+                                </pre>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-amber-600/80 uppercase tracking-wider mb-1">Reproduction Steps</p>
+                                <p className="text-slate-600 whitespace-pre-line bg-amber-50/30 p-2.5 rounded border border-amber-200/30">{issue.reproductionSteps}</p>
+                              </div>
+                            </div>
+
+                            {(issue.consoleError || issue.networkLog || issue.domSelector || issue.apiResponse) && (
+                              <div className="mt-3 pt-3 border-t border-amber-100/50 text-xs">
+                                <p className="font-semibold text-amber-600/80 uppercase tracking-wider mb-2">Telemetry Logs & Proof Details</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  {issue.consoleError && (
+                                    <div>
+                                      <p className="font-medium text-amber-700/80 mb-1">Console Logs / Runtime Stack</p>
+                                      <pre className="bg-red-50/30 text-red-800 p-2.5 rounded border border-red-200/30 overflow-x-auto font-mono whitespace-pre-wrap">
+                                        {issue.consoleError}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {issue.networkLog && (
+                                    <div>
+                                      <p className="font-medium text-amber-700/80 mb-1">Network Transmission Log</p>
+                                      <pre className="bg-amber-50/20 p-2.5 rounded border border-amber-200/20 overflow-x-auto font-mono whitespace-pre-wrap">
+                                        {issue.networkLog}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {issue.domSelector && (
+                                    <div>
+                                      <p className="font-medium text-amber-700/80 mb-1">DOM Selector / Element Code</p>
+                                      <pre className="bg-blue-50/30 text-blue-800 p-2.5 rounded border border-blue-200/30 overflow-x-auto font-mono whitespace-pre-wrap">
+                                        {issue.domSelector}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {issue.apiResponse && (
+                                    <div>
+                                      <p className="font-medium text-amber-700/80 mb-1">API Payload Response</p>
+                                      <pre className="bg-amber-50/20 p-2.5 rounded border border-amber-200/20 overflow-x-auto font-mono whitespace-pre-wrap">
+                                        {issue.apiResponse}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            
+                            <div className="mt-3 pt-3 border-t border-amber-100/50 text-xs">
+                              <p className="font-semibold text-slate-600 uppercase tracking-wider mb-1">Suggested Review Steps</p>
+                              <p className="text-slate-700 bg-slate-100/50 p-2.5 rounded border border-slate-200">{issue.recommendedFix}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {totalIssues === 0 && observations.length === 0 && (
                     <div className="text-center text-slate-500 py-8">
-                      No issues were found during the audit!
+                      No verified issues or observations were found during the audit!
                     </div>
                   )}
                 </div>

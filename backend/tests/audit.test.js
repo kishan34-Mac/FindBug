@@ -73,7 +73,13 @@ describe('Fallback Report Generation Logic', () => {
         reportData.functionalBugs.push({
           issue: 'Console Error Detected',
           description: `A console error occurred in the browser: "${err}"`,
-          severity: 'Medium'
+          severity: 'Medium',
+          evidence: `Console Log: ${err}`,
+          reproducible: 'Yes',
+          confidence: 100,
+          reproductionSteps: '1. Open the page.\n2. Inspect console logs.',
+          recommendedFix: 'Fix the script runtime issues.',
+          observationOnly: false
         });
       });
     }
@@ -83,13 +89,20 @@ describe('Fallback Report Generation Logic', () => {
         reportData.backendIssues.push({
           issue: 'Failed Network Request',
           description: `Network request returned error status: "${req}"`,
-          severity: 'High'
+          severity: 'High',
+          evidence: `Network Log: ${req}`,
+          reproducible: 'Yes',
+          confidence: 100,
+          reproductionSteps: '1. Open the network tab.\n2. Reload page.',
+          recommendedFix: 'Correct network request pathways.',
+          observationOnly: false
         });
       });
     }
 
     expect(reportData.functionalBugs).toHaveLength(1);
     expect(reportData.functionalBugs[0].issue).toBe('Console Error Detected');
+    expect(reportData.functionalBugs[0].evidence).toBe('Console Log: Uncaught TypeError: Cannot read property of null');
     expect(reportData.backendIssues).toHaveLength(1);
     expect(reportData.backendIssues[0].severity).toBe('High');
   });
@@ -128,5 +141,56 @@ describe('Performance Timings Calculation', () => {
     expect(performanceMetrics.ttfb).toBe(40);
     expect(performanceMetrics.domContentLoaded).toBe(230);
     expect(performanceMetrics.pageLoadTime).toBe(320);
+  });
+});
+
+describe('Server-Side Quality Gate', () => {
+  const { runQualityGate } = require('../utils/auditRunner');
+
+  it('should verify correct console errors and reject hallucinated console errors', () => {
+    const scrapedFacts = {
+      url: 'https://example.com',
+      consoleErrors: ['Uncaught TypeError: Cannot read property of null'],
+      consoleWarnings: [],
+      jsExceptions: [],
+      failedResources: [],
+      apiLogs: [],
+      mixedContentRequests: [],
+      performanceMetrics: { ttfb: 100, pageLoadTime: 1000 },
+      vitals: { fcp: 800, lcp: 1200, cls: 0.05, tbt: 20 },
+      securityHeaders: { 'Content-Security-Policy': 'default-src https:' },
+      insecureCookies: [],
+      accessibilityReport: [],
+      seoIssuesList: [],
+      robotsTxtContent: 'User-agent: *',
+      sitemapContent: 'Found',
+      metaDescCount: 1,
+      canonical: 'https://example.com',
+      structuredDataCount: 1,
+      overflowElements: [],
+      brokenImages: [],
+      brokenLinks: []
+    };
+
+    const parsedReport = {
+      functionalBugs: [
+        {
+          issue: 'Console TypeError',
+          description: 'TypeError on null object',
+          evidence: 'Cannot read property of null',
+          confidence: 100
+        },
+        {
+          issue: 'Hallucinated Database Connection Leak',
+          description: 'This bug is made up by AI',
+          evidence: 'Connection leak at host:port',
+          confidence: 100
+        }
+      ]
+    };
+
+    const result = runQualityGate(parsedReport, scrapedFacts);
+    expect(result.functionalBugs).toHaveLength(1);
+    expect(result.functionalBugs[0].issue).toBe('Console TypeError');
   });
 });

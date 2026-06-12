@@ -60,27 +60,137 @@ async function executeAudit(url, progressCallback) {
       viewport: { width: 1280, height: 800 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
+
+    // Inject Web Vitals tracking observers
+    await context.addInitScript(() => {
+      window.collectedVitals = {
+        fcp: 0,
+        lcp: 0,
+        cls: 0,
+        tbt: 0
+      };
+      
+      try {
+        const paintObserver = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.name === 'first-contentful-paint') {
+              window.collectedVitals.fcp = entry.startTime;
+            }
+          }
+        });
+        paintObserver.observe({ type: 'paint', buffered: true });
+      } catch (e) {}
+
+      try {
+        const lcpObserver = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            window.collectedVitals.lcp = Math.max(window.collectedVitals.lcp, entry.startTime);
+          }
+        });
+        lcpObserver.observe({ type: 'largest-contentful-paint', buffered: true });
+      } catch (e) {}
+
+      try {
+        const clsObserver = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (!entry.hadRecentInput) {
+              window.collectedVitals.cls += entry.value;
+            }
+          }
+        });
+        clsObserver.observe({ type: 'layout-shift', buffered: true });
+      } catch (e) {}
+
+      try {
+        const tbtObserver = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.duration > 50) {
+              window.collectedVitals.tbt += (entry.duration - 50);
+            }
+          }
+        });
+        tbtObserver.observe({ type: 'longtask', buffered: true });
+      } catch (e) {}
+    });
+
     const page = await context.newPage();
 
     const consoleErrors = [];
-    const failedRequests = [];
+    const consoleWarnings = [];
+    const jsExceptions = [];
+    const failedResources = [];
+    const apiRequests = {};
+    const apiLogs = [];
+    const mixedContentRequests = [];
 
     page.on('console', (msg) => {
-      if (msg.type() === 'error') {
-        consoleErrors.push(msg.text());
+      const type = msg.type();
+      const text = msg.text();
+      if (type === 'error') {
+        consoleErrors.push(text);
+      } else if (type === 'warning') {
+        consoleWarnings.push(text);
       }
     });
 
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) {
-        failedRequests.push(`${status} ${response.url()}`);
+    page.on('pageerror', (exception) => {
+      jsExceptions.push(exception.stack || exception.message);
+    });
+
+    page.on('requestfailed', (req) => {
+      failedResources.push({
+        url: req.url(),
+        method: req.method(),
+        errorText: req.failure() ? req.failure().errorText : 'Unknown failure',
+        resourceType: req.resourceType()
+      });
+    });
+
+    page.on('request', (req) => {
+      const reqUrl = req.url();
+      if (url.startsWith('https://') && reqUrl.startsWith('http://')) {
+        mixedContentRequests.push(reqUrl);
+      }
+      const type = req.resourceType();
+      if (type === 'fetch' || type === 'xhr') {
+        apiRequests[reqUrl] = {
+          url: reqUrl,
+          method: req.method(),
+          startTime: Date.now(),
+          headers: req.headers()
+        };
+      }
+    });
+
+    page.on('response', async (res) => {
+      const reqUrl = res.url();
+      const reqData = apiRequests[reqUrl];
+      const type = res.request().resourceType();
+      if (type === 'fetch' || type === 'xhr') {
+        const duration = reqData ? (Date.now() - reqData.startTime) : 0;
+        const status = res.status();
+        let responseBody = '';
+        if (status >= 400) {
+          try {
+            responseBody = await res.text();
+          } catch (e) {
+            responseBody = '[Payload not text or body unreadable]';
+          }
+        }
+        apiLogs.push({
+          url: reqUrl,
+          method: res.request().method(),
+          status,
+          statusText: res.statusText(),
+          duration,
+          responseBody: responseBody.substring(0, 500)
+        });
       }
     });
 
     // Navigation Step
     console.log(`Navigating to: ${url}`);
-    await withTimeout(
+    const response = await withTimeout(
       page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }),
       35000
     );
@@ -89,6 +199,8 @@ async function executeAudit(url, progressCallback) {
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
       console.log('Timeout waiting for networkidle, continuing with DOM content');
     });
+
+    const mainResponseHeaders = response ? response.headers() : {};
 
     progressCallback(20);
 
@@ -111,20 +223,14 @@ async function executeAudit(url, progressCallback) {
 
     progressCallback(40);
 
-    // --- STEP: Network ---
+    // --- STEP: Network / Crawling ---
     logger.info("STEP START: Network");
-    const title = await withTimeout(page.title(), 5000, 'No Title');
+    const pageTitle = await withTimeout(page.title(), 5000, 'No Title');
     const bodyText = await withTimeout(
       page.locator('body').innerText().then(txt => txt.substring(0, 5000)),
       10000,
       ''
     );
-    const scrapedData = {
-      title,
-      bodyText,
-      consoleErrors,
-      failedRequests,
-    };
     logger.info("STEP COMPLETE: Network");
 
     progressCallback(60);
@@ -160,53 +266,172 @@ async function executeAudit(url, progressCallback) {
       logger.error("STEP FAILED: Performance Timing", e);
     }
 
-    progressCallback(75);
+    const vitals = await safeEvaluate(page, () => window.collectedVitals || { fcp: 0, lcp: 0, cls: 0, tbt: 0 });
 
-    // --- STEP: Accessibility ---
-    logger.info("STEP START: Accessibility");
-    let accessibilityIssuesList = [];
+    progressCallback(70);
+
+    // --- STEP: Security Checks ---
+    logger.info("STEP START: Security");
+    const securityHeaders = {
+      'Content-Security-Policy': mainResponseHeaders['content-security-policy'] || null,
+      'Strict-Transport-Security': mainResponseHeaders['strict-transport-security'] || null,
+      'X-Frame-Options': mainResponseHeaders['x-frame-options'] || null,
+      'X-Content-Type-Options': mainResponseHeaders['x-content-type-options'] || null,
+      'Referrer-Policy': mainResponseHeaders['referrer-policy'] || null
+    };
+
+    let insecureCookies = [];
     try {
-      const missingAltCount = await withTimeout(
-        safeEvaluate(page, () => document.querySelectorAll('img:not([alt])').length),
-        5000,
-        0
-      );
-      if (missingAltCount > 0) {
-        accessibilityIssuesList.push({
-          issue: 'Missing Alt Attributes',
-          description: `Found ${missingAltCount} image(s) lacking description 'alt' attributes, impacting screen readers.`,
-          severity: 'Medium'
-        });
-      }
+      const cookies = await context.cookies(url);
+      insecureCookies = cookies.filter(c => !c.secure || !c.httpOnly).map(c => ({
+        name: c.name,
+        domain: c.domain,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite
+      }));
+    } catch (e) {
+      logger.error("STEP FAILED: Cookie collection", e);
+    }
+    logger.info("STEP COMPLETE: Security");
 
-      const hasLang = await withTimeout(
-        safeEvaluate(page, () => !!document.documentElement.getAttribute('lang')),
-        5000,
-        true
-      );
-      if (!hasLang) {
-        accessibilityIssuesList.push({
-          issue: 'Missing Language Attribute',
-          description: "The HTML tag lacks a lang attribute, causing screen readers to use default voice systems.",
-          severity: 'Low'
+    // --- STEP: Accessibility DOM Scan ---
+    logger.info("STEP START: Accessibility");
+    let accessibilityReport = [];
+    try {
+      accessibilityReport = await safeEvaluate(page, () => {
+        const issues = [];
+        
+        // 1. Missing alt attributes
+        const imagesWithoutAlt = document.querySelectorAll('img:not([alt])');
+        imagesWithoutAlt.forEach(img => {
+          issues.push({
+            type: 'Missing Alt Attribute',
+            evidence: img.outerHTML.substring(0, 200),
+            element: 'img'
+          });
         });
-      }
+
+        // 2. Missing labels for inputs
+        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"])');
+        inputs.forEach(input => {
+          let hasLabel = false;
+          if (input.getAttribute('aria-label') || input.getAttribute('aria-labelledby') || input.getAttribute('title')) {
+            hasLabel = true;
+          } else {
+            const id = input.getAttribute('id');
+            if (id) {
+              const label = document.querySelector(`label[for="${id}"]`);
+              if (label) hasLabel = true;
+            }
+            if (!hasLabel) {
+              let parent = input.parentElement;
+              while (parent) {
+                if (parent.tagName === 'LABEL') {
+                  hasLabel = true;
+                  break;
+                }
+                parent = parent.parentElement;
+              }
+            }
+          }
+          if (!hasLabel) {
+            issues.push({
+              type: 'Missing Label for Input',
+              evidence: input.outerHTML.substring(0, 200),
+              element: input.tagName.toLowerCase()
+            });
+          }
+        });
+
+        // 3. Contrast Failures
+        function getContrastRatio(el) {
+          const style = window.getComputedStyle(el);
+          const fg = style.color;
+          const bg = style.backgroundColor;
+          function parseRGB(colorStr) {
+            const match = colorStr.match(/\d+/g);
+            if (!match) return [0, 0, 0];
+            return match.slice(0, 3).map(Number);
+          }
+          function getLuminance(rgb) {
+            const a = rgb.map(v => {
+              v /= 255;
+              return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+            });
+            return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+          }
+          let computedBg = bg;
+          let parent = el;
+          while ((computedBg.includes('rgba') && computedBg.includes(', 0)')) || computedBg === 'transparent') {
+            if (!parent.parentElement) break;
+            parent = parent.parentElement;
+            computedBg = window.getComputedStyle(parent).backgroundColor;
+          }
+          const lum1 = getLuminance(parseRGB(fg));
+          const lum2 = getLuminance(parseRGB(computedBg));
+          const brightest = Math.max(lum1, lum2);
+          const darkest = Math.min(lum1, lum2);
+          return (brightest + 0.05) / (darkest + 0.05);
+        }
+
+        const textNodes = [];
+        const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null, false);
+        let n;
+        while (n = walk.nextNode()) {
+          const text = n.innerText ? n.innerText.trim() : '';
+          if (text.length > 0 && n.children.length === 0) {
+            textNodes.push(n);
+          }
+        }
+
+        textNodes.slice(0, 50).forEach(el => {
+          try {
+            const ratio = getContrastRatio(el);
+            if (ratio < 4.5) {
+              issues.push({
+                type: 'Contrast Failure',
+                evidence: `${el.outerHTML.substring(0, 100)} (Contrast: ${ratio.toFixed(2)}:1)`,
+                element: el.tagName.toLowerCase()
+              });
+            }
+          } catch (e) {}
+        });
+
+        // 4. Keyboard focus indicators / navigation
+        const interactive = document.querySelectorAll('[onclick], [style*="cursor: pointer"], [style*="cursor:pointer"]');
+        interactive.forEach(el => {
+          const tag = el.tagName.toLowerCase();
+          const focusable = ['a', 'button', 'input', 'select', 'textarea'];
+          if (!focusable.includes(tag) && !el.getAttribute('tabindex')) {
+            issues.push({
+              type: 'Keyboard Navigation Issue',
+              evidence: el.outerHTML.substring(0, 200),
+              element: tag
+            });
+          }
+        });
+
+        return issues;
+      });
       logger.info("STEP COMPLETE: Accessibility");
     } catch (e) {
-      logger.error("STEP FAILED: Accessibility", e);
+      logger.error("STEP FAILED: Accessibility DOM scan", e);
     }
 
-    progressCallback(80);
+    progressCallback(75);
 
-    // --- STEP: SEO ---
+    // --- STEP: SEO & Sitemap/Robots check ---
     logger.info("STEP START: SEO");
     let seoIssuesList = [];
+    let robotsTxtContent = 'Unable to verify';
+    let sitemapContent = 'Unable to verify';
+    let metaDescCount = 0;
+    let canonical = null;
+    let structuredDataCount = 0;
+
     try {
-      const metaDescCount = await withTimeout(
-        safeEvaluate(page, () => document.querySelectorAll('meta[name="description"]').length),
-        5000,
-        0
-      );
+      metaDescCount = await safeEvaluate(page, () => document.querySelectorAll('meta[name="description"]').length);
       if (metaDescCount === 0) {
         seoIssuesList.push({
           issue: 'Missing Meta Description',
@@ -215,11 +440,21 @@ async function executeAudit(url, progressCallback) {
         });
       }
 
-      const h1Count = await withTimeout(
-        safeEvaluate(page, () => document.querySelectorAll('h1').length),
-        5000,
-        0
-      );
+      canonical = await safeEvaluate(page, () => {
+        const link = document.querySelector('link[rel="canonical"]');
+        return link ? link.getAttribute('href') : null;
+      });
+      if (!canonical) {
+        seoIssuesList.push({
+          issue: 'Missing Canonical Link',
+          description: 'No canonical link tag found. Duplicate content indexing risk.',
+          severity: 'Medium'
+        });
+      }
+
+      structuredDataCount = await safeEvaluate(page, () => document.querySelectorAll('script[type="application/ld+json"]').length);
+
+      const h1Count = await safeEvaluate(page, () => document.querySelectorAll('h1').length);
       if (h1Count === 0) {
         seoIssuesList.push({
           issue: 'Missing Heading Structure',
@@ -233,37 +468,179 @@ async function executeAudit(url, progressCallback) {
           severity: 'Low'
         });
       }
+
+      // Fetch robots.txt and sitemap.xml
+      try {
+        const robotsRes = await context.request.get(new URL('/robots.txt', url).href).catch(() => null);
+        if (robotsRes && robotsRes.ok()) {
+          robotsTxtContent = await robotsRes.text();
+        } else {
+          robotsTxtContent = `Not Found (Status: ${robotsRes ? robotsRes.status() : 'Error'})`;
+          seoIssuesList.push({
+            issue: 'Missing Robots.txt',
+            description: 'No robots.txt was found. Search engines cannot easily optimize domain crawling limits.',
+            severity: 'Medium'
+          });
+        }
+      } catch (e) {
+        robotsTxtContent = `Error fetching: ${e.message}`;
+      }
+
+      try {
+        const sitemapRes = await context.request.get(new URL('/sitemap.xml', url).href).catch(() => null);
+        if (sitemapRes && sitemapRes.ok()) {
+          sitemapContent = 'Found (Status 200)';
+        } else {
+          sitemapContent = `Not Found (Status: ${sitemapRes ? sitemapRes.status() : 'Error'})`;
+          seoIssuesList.push({
+            issue: 'Missing Sitemap.xml',
+            description: 'No sitemap.xml was detected at the root. Crawlers might miss deeper nested pages.',
+            severity: 'Medium'
+          });
+        }
+      } catch (e) {
+        sitemapContent = `Error fetching: ${e.message}`;
+      }
+
       logger.info("STEP COMPLETE: SEO");
     } catch (e) {
       logger.error("STEP FAILED: SEO", e);
     }
 
+    // --- STEP: Layout shifts / Overflow check ---
+    let overflowElements = [];
+    try {
+      overflowElements = await safeEvaluate(page, () => {
+        const list = [];
+        const elements = document.querySelectorAll('*');
+        const width = window.innerWidth;
+        for (const el of elements) {
+          const rect = el.getBoundingClientRect();
+          if (rect.right > width) {
+            list.push({
+              tagName: el.tagName,
+              id: el.id,
+              className: el.className,
+              right: rect.right,
+              width
+            });
+          }
+        }
+        return list;
+      });
+    } catch (e) {
+      logger.error("STEP FAILED: Overflow check", e);
+    }
+
+    // Broken images check
+    let brokenImages = [];
+    try {
+      brokenImages = await safeEvaluate(page, () => {
+        const list = [];
+        const imgs = document.querySelectorAll('img');
+        for (const img of imgs) {
+          if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+            list.push({
+              src: img.src,
+              outerHTML: img.outerHTML.substring(0, 200)
+            });
+          }
+        }
+        return list;
+      });
+    } catch (e) {}
+
+    // Broken links check
+    let brokenLinks = [];
+    try {
+      brokenLinks = await safeEvaluate(page, () => {
+        const list = [];
+        const anchors = document.querySelectorAll('a');
+        for (const a of anchors) {
+          const href = a.getAttribute('href');
+          if (!href || href === '#' || href.startsWith('javascript:')) {
+            list.push({
+              text: a.innerText.trim(),
+              href: href || '',
+              outerHTML: a.outerHTML.substring(0, 200)
+            });
+          }
+        }
+        return list;
+      });
+    } catch (e) {}
+
+    const scrapedFacts = {
+      url,
+      title: pageTitle,
+      bodyText,
+      consoleErrors,
+      consoleWarnings,
+      jsExceptions,
+      failedResources,
+      apiLogs,
+      mixedContentRequests,
+      performanceMetrics,
+      vitals,
+      securityHeaders,
+      insecureCookies,
+      accessibilityReport,
+      seoIssuesList,
+      robotsTxtContent,
+      sitemapContent,
+      metaDescCount,
+      canonical,
+      structuredDataCount,
+      overflowElements,
+      brokenImages,
+      brokenLinks
+    };
+
     await browser.close();
     browser = null;
 
-    progressCallback(90);
+    progressCallback(85);
 
     // --- STEP: AI Synthesis ---
     logger.info("STEP START: AI Synthesis");
     const prompt = `
-      Act as an Expert QA Reviewer. I have scraped data from the following URL: ${url}.
-      Here is the scraped data:
-      Title: ${scrapedData.title}
-      Body Text Snippet: ${scrapedData.bodyText}
-      Console Errors: ${JSON.stringify(scrapedData.consoleErrors)}
-      Failed Network Requests: ${JSON.stringify(scrapedData.failedRequests)}
+      Act as a Principal QA Engineer, Security Auditor, and Performance Engineer. I have performed a real-time audit on the URL: ${url}.
+      Here is the raw verified evidence collected directly from the page:
+      ${JSON.stringify(scrapedFacts, null, 2)}
 
-      Based on this data, return a strictly formatted JSON object categorizing ONLY the REAL issues found in the scraped data. DO NOT simulate or hallucinate typical issues. If a category has no issues based on the provided data, return an empty array for that category. Provide a specific "description" explaining the exact error or issue found. Ensure severities are strictly labeled as Critical, High, Medium, or Low.
+      Analyze the raw evidence and return a strictly formatted JSON object containing ONLY verified findings.
       
+      CRITICAL RULES:
+      1. NEVER generate hallucinated findings, sample issues, mock bugs, generic template reports, or assumptions.
+      2. Every single issue MUST be directly linked to a specific item in the Console Errors, JS Exceptions, Failed Network Requests, Performance timing metrics, Security issues, Accessibility issues, or SEO issues listed above. If none of these show a bug, return an empty array for that category. It is better to return an empty array than a single unverified issue.
+      3. For every issue, populate all fields:
+         - "issue": The specific title of the finding (e.g., "Script ReferenceError", "Broken Resource GET", "High TTFB Latency")
+         - "description": A concise explanation of the bug.
+         - "severity": "Critical", "High", "Medium", or "Low"
+         - "exactPageUrl": The exact URL where the issue was detected.
+         - "evidence": The exact error trace, failed URL, or measured timing metric.
+         - "screenshot": "N/A" or optional description if applicable.
+         - "networkLog": Raw network log/line or status text if applicable.
+         - "domSelector": CSS selector of the failing element if applicable.
+         - "consoleError": Console stack trace or message if applicable.
+         - "apiResponse": API payload response if applicable.
+         - "reproducible": "Yes" or "No"
+         - "confidence": 100 (Only include issues verified with 100% confidence. If any issue is not 100% verified, set confidence below 100 and set "observationOnly": true)
+         - "reproductionSteps": Step-by-step instructions to reproduce this issue.
+         - "recommendedFix": Actionable engineering steps to resolve the issue.
+         - "observationOnly": true or false (Set to true if confidence is less than 100% or requires manual check).
+
       Required JSON format:
       {
-        "frontendIssues": [{ "issue": "Short Title", "description": "Detailed explanation of the issue found in the text or DOM", "severity": "High" }],
-        "backendIssues": [{ "issue": "Short Title", "description": "Explanation of failed requests or API errors", "severity": "Critical" }],
-        "functionalBugs": [{ "issue": "Short Title", "description": "Explanation of console errors or broken logic", "severity": "Medium" }],
-        "responsivenessIssues": [{ "issue": "Short Title", "description": "Explanation of responsiveness issues if any", "severity": "Low" }],
-        "performanceIssues": [{ "issue": "Short Title", "description": "Explanation of performance bottlenecks from timing info", "severity": "High" }]
+        "frontendIssues": [],
+        "backendIssues": [],
+        "functionalBugs": [],
+        "responsivenessIssues": [],
+        "performanceIssues": [],
+        "seoIssues": [],
+        "accessibilityIssues": []
       }
-      
+
       Return ONLY valid JSON. Do not include markdown formatting like \`\`\`json.
     `;
 
@@ -272,7 +649,9 @@ async function executeAudit(url, progressCallback) {
       backendIssues: [],
       functionalBugs: [],
       responsivenessIssues: [],
-      performanceIssues: []
+      performanceIssues: [],
+      seoIssues: [],
+      accessibilityIssues: []
     };
 
     try {
@@ -313,42 +692,20 @@ async function executeAudit(url, progressCallback) {
           aiText = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
         }
         const parsed = JSON.parse(aiText);
-        reportData = {
-          frontendIssues: parsed.frontendIssues || [],
-          backendIssues: parsed.backendIssues || [],
-          functionalBugs: parsed.functionalBugs || [],
-          responsivenessIssues: parsed.responsivenessIssues || [],
-          performanceIssues: parsed.performanceIssues || []
-        };
+        
+        // Quality Gate: Process, sanitize, and verify all issues
+        const verifiedData = runQualityGate(parsed, scrapedFacts);
+        Object.keys(reportData).forEach(key => {
+          reportData[key] = verifiedData[key];
+        });
       }
       logger.info("STEP COMPLETE: AI Synthesis");
     } catch (aiError) {
       logger.error("STEP FAILED: AI Synthesis - using partial report fallbacks", aiError);
-
-      if (scrapedData.consoleErrors.length > 0) {
-        scrapedData.consoleErrors.forEach((err) => {
-          reportData.functionalBugs.push({
-            issue: 'Console Error Detected',
-            description: `A console error occurred in the browser: "${err}"`,
-            severity: 'Medium'
-          });
-        });
-      }
-      if (scrapedData.failedRequests.length > 0) {
-        scrapedData.failedRequests.forEach((req) => {
-          reportData.backendIssues.push({
-            issue: 'Failed Network Request',
-            description: `Network request returned error status: "${req}"`,
-            severity: 'High'
-          });
-        });
-      }
-      reportData.frontendIssues.push({
-        issue: 'AI Analysis Unavailable',
-        description: `The automated AI model was unavailable to perform deep structure checks (${aiError.message || '503 overload'}). Crawled browser errors are shown below.`,
-        severity: 'Low'
-      });
+      reportData = generateFallbackReport(scrapedFacts);
     }
+
+    progressCallback(90);
 
     // --- STEP: Report Persistence ---
     logger.info("STEP START: Report Persistence");
@@ -360,8 +717,8 @@ async function executeAudit(url, progressCallback) {
       functionalBugs: reportData.functionalBugs,
       responsivenessIssues: reportData.responsivenessIssues,
       performanceIssues: reportData.performanceIssues,
-      seoIssues: seoIssuesList,
-      accessibilityIssues: accessibilityIssuesList,
+      seoIssues: reportData.seoIssues,
+      accessibilityIssues: reportData.accessibilityIssues,
       screenshot: screenshotBase64,
       performanceMetrics
     });
@@ -381,7 +738,245 @@ async function executeAudit(url, progressCallback) {
   }
 }
 
+// Strict Server-Side Quality Gate Filter
+function runQualityGate(parsed, scraped) {
+  const verified = {
+    frontendIssues: [],
+    backendIssues: [],
+    functionalBugs: [],
+    responsivenessIssues: [],
+    performanceIssues: [],
+    seoIssues: [],
+    accessibilityIssues: []
+  };
+
+  const categories = Object.keys(verified);
+
+  categories.forEach(cat => {
+    if (!Array.isArray(parsed[cat])) return;
+
+    parsed[cat].forEach(issue => {
+      // 1. Must have basic fields
+      if (!issue.issue || !issue.description || !issue.evidence) {
+        return; // reject immediately
+      }
+
+      // 2. Validate against scraped evidence
+      let isVerified = false;
+      const lowerEvidence = (issue.evidence || '').toLowerCase();
+      const lowerIssue = (issue.issue || '').toLowerCase();
+      const lowerDescription = (issue.description || '').toLowerCase();
+
+      if (cat === 'functionalBugs' || cat === 'frontendIssues') {
+        const hasConsoleErr = scraped.consoleErrors.some(e => e.toLowerCase().includes(lowerEvidence) || lowerEvidence.includes(e.toLowerCase()));
+        const hasWarning = scraped.consoleWarnings.some(w => w.toLowerCase().includes(lowerEvidence) || lowerEvidence.includes(w.toLowerCase()));
+        const hasException = scraped.jsExceptions.some(ex => ex.toLowerCase().includes(lowerEvidence) || lowerEvidence.includes(ex.toLowerCase()));
+        const hasBrokenImage = scraped.brokenImages.some(img => img.src.toLowerCase().includes(lowerEvidence) || img.outerHTML.toLowerCase().includes(lowerEvidence));
+        const hasBrokenLink = scraped.brokenLinks.some(lnk => lnk.href.toLowerCase().includes(lowerEvidence) || lnk.outerHTML.toLowerCase().includes(lowerEvidence));
+
+        if (hasConsoleErr || hasWarning || hasException || hasBrokenImage || hasBrokenLink) {
+          isVerified = true;
+        }
+      } else if (cat === 'backendIssues') {
+        const hasFailedResource = scraped.failedResources.some(r => r.url.toLowerCase().includes(lowerEvidence) || lowerEvidence.includes(r.url.toLowerCase()));
+        const hasFailedApi = scraped.apiLogs.some(api => (api.status >= 400 && (api.url.toLowerCase().includes(lowerEvidence) || lowerEvidence.includes(api.url.toLowerCase()))));
+        const hasCors = lowerEvidence.includes('cors') || lowerIssue.includes('cors') || lowerDescription.includes('cors');
+        const hasMissingHeader = Object.entries(scraped.securityHeaders).some(([key, val]) => val === null && (lowerIssue.includes(key.toLowerCase()) || lowerDescription.includes(key.toLowerCase())));
+        const hasCookieIssue = scraped.insecureCookies.length > 0 && (lowerIssue.includes('cookie') || lowerDescription.includes('cookie'));
+        const hasMixedContent = scraped.mixedContentRequests.length > 0 && (lowerIssue.includes('mixed content') || lowerDescription.includes('mixed content'));
+
+        if (hasFailedResource || hasFailedApi || hasCors || hasMissingHeader || hasCookieIssue || hasMixedContent) {
+          isVerified = true;
+        }
+      } else if (cat === 'responsivenessIssues') {
+        const hasOverflow = scraped.overflowElements.length > 0;
+        if (hasOverflow) {
+          isVerified = true;
+        }
+      } else if (cat === 'performanceIssues') {
+        const m = scraped.performanceMetrics;
+        const v = scraped.vitals;
+        const isSlow = m.ttfb > 600 || m.pageLoadTime > 4000 || v.fcp > 3000 || v.lcp > 4000 || v.cls > 0.25 || v.tbt > 300;
+        if (isSlow) {
+          isVerified = true;
+        }
+      } else if (cat === 'seoIssues') {
+        const isSeoMissing = (scraped.seoIssuesList.length > 0) || 
+                            (scraped.robotsTxtContent.includes('Not Found') && lowerIssue.includes('robots')) ||
+                            (scraped.sitemapContent.includes('Not Found') && lowerIssue.includes('sitemap')) ||
+                            (scraped.canonical === null && lowerIssue.includes('canonical')) ||
+                            (scraped.metaDescCount === 0 && lowerIssue.includes('description')) ||
+                            (scraped.title === 'No Title' && lowerIssue.includes('title')) ||
+                            (scraped.structuredDataCount === 0 && lowerIssue.includes('structured'));
+        if (isSeoMissing) {
+          isVerified = true;
+        }
+      } else if (cat === 'accessibilityIssues') {
+        const hasA11y = scraped.accessibilityReport.some(a => a.type.toLowerCase().includes(lowerIssue) || lowerIssue.includes(a.type.toLowerCase()) || lowerEvidence.includes(a.evidence.toLowerCase()));
+        if (hasA11y) {
+          isVerified = true;
+        }
+      }
+
+      if (isVerified) {
+        if (typeof issue.confidence !== 'number') {
+          issue.confidence = 100;
+        }
+        if (issue.confidence < 100) {
+          issue.observationOnly = true;
+        } else {
+          issue.observationOnly = !!issue.observationOnly;
+        }
+        
+        issue.exactPageUrl = issue.exactPageUrl || scraped.url;
+        issue.screenshot = issue.screenshot || "";
+        issue.networkLog = issue.networkLog || "";
+        issue.domSelector = issue.domSelector || "";
+        issue.consoleError = issue.consoleError || "";
+        issue.apiResponse = issue.apiResponse || "";
+        issue.reproducible = issue.reproducible || "Yes";
+        issue.reproductionSteps = issue.reproductionSteps || "N/A";
+        issue.recommendedFix = issue.recommendedFix || "N/A";
+
+        verified[cat].push(issue);
+      }
+    });
+  });
+
+  return verified;
+}
+
+function generateFallbackReport(scraped) {
+  const reportData = {
+    frontendIssues: [],
+    backendIssues: [],
+    functionalBugs: [],
+    responsivenessIssues: [],
+    performanceIssues: [],
+    seoIssues: [],
+    accessibilityIssues: []
+  };
+
+  // Map JS Exceptions & Console Errors
+  if (scraped.jsExceptions.length > 0) {
+    scraped.jsExceptions.forEach((err) => {
+      reportData.functionalBugs.push({
+        issue: 'JavaScript Exception Detected',
+        description: `An uncaught script error was thrown: "${err.split('\n')[0]}"`,
+        severity: 'Critical',
+        exactPageUrl: scraped.url,
+        evidence: `Stack trace: ${err}`,
+        screenshot: '',
+        networkLog: '',
+        domSelector: '',
+        consoleError: err,
+        apiResponse: '',
+        reproducible: 'Yes',
+        confidence: 100,
+        reproductionSteps: '1. Open the page in a browser.\n2. Open developer console.\n3. The script exception is printed immediately on load.',
+        recommendedFix: 'Examine the stack trace, check for undefined object dereferencing, and load scripts safely.',
+        observationOnly: false
+      });
+    });
+  }
+
+  if (scraped.consoleErrors.length > 0) {
+    scraped.consoleErrors.forEach((err) => {
+      reportData.functionalBugs.push({
+        issue: 'Console Error Detected',
+        description: `A console error occurred in the browser: "${err}"`,
+        severity: 'Medium',
+        exactPageUrl: scraped.url,
+        evidence: `Console Log: ${err}`,
+        screenshot: '',
+        networkLog: '',
+        domSelector: '',
+        consoleError: err,
+        apiResponse: '',
+        reproducible: 'Yes',
+        confidence: 100,
+        reproductionSteps: '1. Open the page.\n2. Review developer console errors.',
+        recommendedFix: 'Review error cause in console statement and ensure proper execution pathways.',
+        observationOnly: false
+      });
+    });
+  }
+
+  // Map network failures
+  if (scraped.failedResources.length > 0) {
+    scraped.failedResources.forEach((req) => {
+      reportData.backendIssues.push({
+        issue: 'Failed Network Request',
+        description: `Resource failed to load with status: "${req.errorText}"`,
+        severity: 'High',
+        exactPageUrl: scraped.url,
+        evidence: `Failed Request: ${req.method} ${req.url} - ${req.errorText}`,
+        screenshot: '',
+        networkLog: `${req.method} ${req.url} failed with ${req.errorText}`,
+        domSelector: '',
+        consoleError: '',
+        apiResponse: '',
+        reproducible: 'Yes',
+        confidence: 100,
+        reproductionSteps: '1. Inspect network requests on load.\n2. Search for the failed URL.',
+        recommendedFix: 'Ensure target resource is online and origin CORS policies allow access.',
+        observationOnly: false
+      });
+    });
+  }
+
+  // Map accessibility issues
+  if (scraped.accessibilityReport.length > 0) {
+    scraped.accessibilityReport.forEach(issue => {
+      reportData.accessibilityIssues.push({
+        issue: issue.type,
+        description: `Accessibility check failed for: ${issue.type}`,
+        severity: 'Medium',
+        exactPageUrl: scraped.url,
+        evidence: `Element evidence: ${issue.evidence}`,
+        screenshot: '',
+        networkLog: '',
+        domSelector: issue.evidence,
+        consoleError: '',
+        apiResponse: '',
+        reproducible: 'Yes',
+        confidence: 100,
+        reproductionSteps: `1. View page source.\n2. Locate DOM element: ${issue.evidence}`,
+        recommendedFix: 'Update element tags to meet WCAG standards.',
+        observationOnly: false
+      });
+    });
+  }
+
+  // Map SEO issues
+  if (scraped.seoIssuesList.length > 0) {
+    scraped.seoIssuesList.forEach(issue => {
+      reportData.seoIssues.push({
+        issue: issue.issue,
+        description: issue.description,
+        severity: issue.severity,
+        exactPageUrl: scraped.url,
+        evidence: `SEO Meta audit failed: ${issue.issue}`,
+        screenshot: '',
+        networkLog: '',
+        domSelector: '',
+        consoleError: '',
+        apiResponse: '',
+        reproducible: 'Yes',
+        confidence: 100,
+        reproductionSteps: '1. Inspect page head tag settings.',
+        recommendedFix: 'Add correct tags to page headers.',
+        observationOnly: false
+      });
+    });
+  }
+
+  return reportData;
+}
+
 module.exports = {
   executeAudit,
-  withTimeout
+  withTimeout,
+  runQualityGate,
+  generateFallbackReport
 };

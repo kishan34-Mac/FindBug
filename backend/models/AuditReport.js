@@ -7,7 +7,20 @@ const IssueSchema = new mongoose.Schema({
     type: String, 
     required: true,
     enum: ['Critical', 'High', 'Medium', 'Low']
-  }
+  },
+  exactPageUrl: { type: String, required: true },
+  evidence: { type: String, required: true },
+  screenshot: { type: String, default: "" },
+  networkLog: { type: String, default: "" },
+  domSelector: { type: String, default: "" },
+  consoleError: { type: String, default: "" },
+  apiResponse: { type: String, default: "" },
+  detectedAt: { type: Date, default: Date.now },
+  reproducible: { type: String, required: true },
+  confidence: { type: Number, required: true },
+  reproductionSteps: { type: String, required: true },
+  recommendedFix: { type: String, required: true },
+  observationOnly: { type: Boolean, default: false }
 }, { _id: false });
 
 const AuditReportSchema = new mongoose.Schema({
