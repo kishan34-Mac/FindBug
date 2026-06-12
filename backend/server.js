@@ -1,4 +1,10 @@
 require('dotenv').config();
+
+// Force Playwright to use the local node_modules directory for browsers.
+// This ensures it finds the browser installed during the build phase,
+// even if the Render start command doesn't explicitly set the environment variable.
+process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+
 const { execSync } = require('child_process');
 
 // Ensure Playwright browsers are installed before starting the server
