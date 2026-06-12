@@ -18,7 +18,15 @@ const AuditReportSchema = new mongoose.Schema({
   backendIssues: [IssueSchema],
   functionalBugs: [IssueSchema],
   responsivenessIssues: [IssueSchema],
-  performanceIssues: [IssueSchema]
+  performanceIssues: [IssueSchema],
+  screenshot: { type: String },
+  performanceMetrics: {
+    dnsLookupTime: { type: Number, default: 0 },
+    tcpConnectTime: { type: Number, default: 0 },
+    ttfb: { type: Number, default: 0 },
+    domContentLoaded: { type: Number, default: 0 },
+    pageLoadTime: { type: Number, default: 0 }
+  }
 });
 
 module.exports = mongoose.model('AuditReport', AuditReportSchema);

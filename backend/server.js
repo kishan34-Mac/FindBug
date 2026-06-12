@@ -22,11 +22,18 @@ if (process.env.RENDER === 'true' || process.env.NODE_ENV === 'production') {
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const requestTracing = require('./middleware/tracing');
+const { resumeJobs } = require('./utils/queue');
 const auditRoutes = require('./routes/audit');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Request tracing middleware (registers unique IDs and logs requests)
+app.use(requestTracing);
+
+// CORS configuration supporting production and local development
 const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : '*';
 const corsOptions = {
   origin: (origin, callback) => {
@@ -40,11 +47,52 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-app.use('/api/audit', auditRoutes);
+// Rate limiting middleware
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes.' }
+});
 
+// Health check endpoint
+app.get('/api/audit/health', (req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
+  res.status(isDbConnected ? 200 : 503).json({
+    status: isDbConnected ? 'UP' : 'DOWN',
+    database: isDbConnected ? 'CONNECTED' : 'DISCONNECTED',
+    timestamp: new Date()
+  });
+});
+
+// Register routes
+app.use('/api/audit', apiLimiter, auditRoutes);
+
+// Global Error Handler Middleware
+app.use((err, req, res, next) => {
+  const reqId = req.id || 'N/A';
+  console.error(`[${new Date().toISOString()}] [ERROR] [Req:${reqId}] Global error:`, err);
+  
+  res.status(err.status || 500).json({
+    error: err.name || 'InternalServerError',
+    message: err.message || 'An unexpected error occurred on the server.',
+    requestId: reqId
+  });
+});
+
+// Connect to Database and start server
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('Connected to MongoDB');
+    
+    // Resume any interrupted queue jobs
+    resumeJobs().then(() => {
+      console.log('Queue jobs initialization complete.');
+    }).catch(err => {
+      console.error('Failed to initialize queue resumption:', err);
+    });
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });

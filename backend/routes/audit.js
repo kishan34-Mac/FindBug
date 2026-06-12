@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { runAudit } = require('../controllers/auditController');
+const { submitAudit, getAuditStatus } = require('../controllers/auditController');
+const { validateAuditRequest } = require('../middleware/validation');
 
-router.post('/', runAudit);
+router.post('/', validateAuditRequest, submitAudit);
+router.get('/status/:jobId', getAuditStatus);
 
 module.exports = router;

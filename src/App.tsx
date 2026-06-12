@@ -67,6 +67,14 @@ function App() {
   const [completedSteps, setCompletedSteps] = useState<number[]>([]);
   const [progressWidth, setProgressWidth] = useState(0);
   const [showDetailed, setShowDetailed] = useState(false);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<{
+    dnsLookupTime: number;
+    tcpConnectTime: number;
+    ttfb: number;
+    domContentLoaded: number;
+    pageLoadTime: number;
+  } | null>(null);
   const [scanDate] = useState(new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -84,82 +92,119 @@ function App() {
   useEffect(() => {
     if (appState !== 'loading') return;
 
+    let pollInterval: NodeJS.Timeout;
+
     const runPipeline = async () => {
-      let progressInterval: NodeJS.Timeout;
-      
       try {
-        // Start artificial progress steps
-        progressInterval = setInterval(() => {
-          setProgressWidth((prev) => {
-            const next = prev + 5;
-            const bounded = next > 90 ? 90 : next;
-            
-            // Calculate step based on new progress width
-            const newStep = Math.floor((bounded / 100) * pipelineSteps.length);
-            setCurrentStep(newStep >= pipelineSteps.length ? pipelineSteps.length - 1 : newStep);
-            
-            return bounded;
-          });
-        }, 800);
-
         const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/_/backend' : 'http://localhost:5001');
-        
-        // Add a timeout of 5 minutes (300000ms) to allow for Playwright installation on first boot + Render cold starts
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000);
 
-        const response = await fetch(`${apiUrl}/api/audit`, {
+        // Step 1: Submit the audit job
+        const submitResponse = await fetch(`${apiUrl}/api/audit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-          signal: controller.signal
+          body: JSON.stringify({ url })
         });
-        
-        clearTimeout(timeoutId);
-        
-        const data = await response.json();
-        clearInterval(progressInterval);
-        
-        if (!response.ok) {
-          throw new Error(data.details || data.error || 'Audit failed');
+
+        const submitData = await submitResponse.json();
+
+        if (!submitResponse.ok) {
+          throw new Error(submitData.details || submitData.error || 'Failed to submit audit job');
         }
 
-        const addIds = (arr: any[]) => arr.map((item, i) => ({ ...item, id: i + 1, title: item.issue, description: item.description || 'No description provided' }));
+        const jobId = submitData.jobId;
 
-        setIssues({
-          frontend: addIds(data.frontendIssues || []),
-          backend: addIds(data.backendIssues || []),
-          functional: addIds(data.functionalBugs || []),
-          responsive: addIds(data.responsivenessIssues || []),
-          performance: addIds(data.performanceIssues || [])
-        });
+        // Step 2: Poll status
+        pollInterval = setInterval(async () => {
+          try {
+            const statusResponse = await fetch(`${apiUrl}/api/audit/status/${jobId}`);
+            const statusData = await statusResponse.json();
 
-        setProgressWidth(100);
-        setCompletedSteps(pipelineSteps.map((_, i) => i));
-        setCurrentStep(pipelineSteps.length);
-        
-        setTimeout(() => {
-          setAppState('results');
-        }, 600);
+            if (!statusResponse.ok) {
+              throw new Error(statusData.error || 'Error fetching status');
+            }
 
-      } catch (error: any) {
+            const progress = statusData.progress || 0;
+            setProgressWidth(progress);
+
+            // Update current step index based on progress
+            const newStep = Math.min(
+              pipelineSteps.length - 1,
+              Math.floor((progress / 100) * pipelineSteps.length)
+            );
+            setCurrentStep(newStep);
+
+            // Calculate completed steps
+            const completed: number[] = [];
+            for (let i = 0; i < pipelineSteps.length; i++) {
+              const stepThreshold = ((i + 1) / pipelineSteps.length) * 100;
+              if (progress >= stepThreshold) {
+                completed.push(i);
+              }
+            }
+            setCompletedSteps(completed);
+
+            if (statusData.status === 'COMPLETED' && statusData.report) {
+              clearInterval(pollInterval);
+
+              const report = statusData.report;
+              interface RawIssue {
+                issue: string;
+                description: string;
+                severity: Severity;
+              }
+              const addIds = (arr: RawIssue[]) => arr.map((item, i) => ({
+                ...item,
+                id: i + 1,
+                title: item.issue,
+                description: item.description || 'No description provided'
+              }));
+
+              setIssues({
+                frontend: addIds(report.frontendIssues || []),
+                backend: addIds(report.backendIssues || []),
+                functional: addIds(report.functionalBugs || []),
+                responsive: addIds(report.responsivenessIssues || []),
+                performance: addIds(report.performanceIssues || [])
+              });
+
+              setScreenshot(report.screenshot || null);
+              setMetrics(report.performanceMetrics || null);
+
+              setProgressWidth(100);
+              setCompletedSteps(pipelineSteps.map((_, i) => i));
+              setCurrentStep(pipelineSteps.length);
+
+              setTimeout(() => {
+                setAppState('results');
+              }, 600);
+            } else if (statusData.status === 'FAILED') {
+              clearInterval(pollInterval);
+              throw new Error(statusData.error || 'Audit job failed on the backend');
+            }
+          } catch (pollErr) {
+            const err = pollErr as Error;
+            clearInterval(pollInterval);
+            console.error('Polling error:', err);
+            alert(`Error: ${err.message || 'Failed to update audit status.'}`);
+            setAppState('input');
+          }
+        }, 1500);
+
+      } catch (error) {
         console.error('Audit error:', error);
-        
-        let errorMessage = error.message || 'Failed to generate audit report.';
-        if (error.name === 'AbortError') {
-          errorMessage = 'The request timed out. This may happen if the backend is waking up or taking too long to scan the website. Please try again.';
-        }
-        
-        alert(`Error: ${errorMessage}`);
+        const err = error as Error;
+        alert(`Error: ${err.message || 'Failed to generate audit report.'}`);
         setAppState('input');
-      } finally {
-        if (progressInterval!) {
-          clearInterval(progressInterval);
-        }
       }
     };
 
     runPipeline();
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [appState, url]);
 
   const handleNewScan = () => {
@@ -362,6 +407,65 @@ function App() {
           </header>
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Visual Screenshot and Performance Metrics Dashboard */}
+            {(metrics || screenshot) && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                {/* Performance Metrics Card */}
+                {metrics && (
+                  <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                        <Zap className="w-5 h-5 text-amber-500" />
+                        Performance Timing
+                      </h3>
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                          <span className="text-slate-500">DNS Lookup Time</span>
+                          <span className="font-semibold text-slate-800">{metrics.dnsLookupTime} ms</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                          <span className="text-slate-500">TCP Connect Time</span>
+                          <span className="font-semibold text-slate-800">{metrics.tcpConnectTime} ms</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                          <span className="text-slate-500">Time to First Byte (TTFB)</span>
+                          <span className="font-semibold text-slate-800">{metrics.ttfb} ms</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                          <span className="text-slate-500">DOM Content Loaded</span>
+                          <span className="font-semibold text-slate-800">{metrics.domContentLoaded} ms</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm pb-1">
+                          <span className="text-slate-500 font-medium">Full Page Load Time</span>
+                          <span className="font-bold text-indigo-600">{metrics.pageLoadTime} ms</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400">
+                      Extracted from window.performance timing metrics
+                    </div>
+                  </div>
+                )}
+
+                {/* Visual Snapshot Card */}
+                {screenshot && (
+                  <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col">
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                      <Camera className="w-5 h-5 text-indigo-500" />
+                      Visual Page Snapshot
+                    </h3>
+                    <div className="flex-1 min-h-[200px] border border-slate-200 rounded-lg overflow-hidden relative bg-slate-50">
+                      <img 
+                        src={`data:image/jpeg;base64,${screenshot}`} 
+                        alt="Audited Page Screenshot" 
+                        className="w-full h-full object-cover max-h-[300px]"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5 gap-6">
               {categories.map((category, idx) => {
                 const highPriorityCount = category.issues.filter(
