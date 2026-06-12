@@ -5,10 +5,15 @@ const AuditReport = require('../models/AuditReport');
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 exports.runAudit = async (req, res) => {
-  const { url } = req.body;
+  let { url } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
+  }
+
+  // Ensure URL has a protocol
+  if (!/^https?:\/\//i.test(url)) {
+    url = 'https://' + url;
   }
 
   let browser;
@@ -80,15 +85,38 @@ exports.runAudit = async (req, res) => {
       Return ONLY valid JSON. Do not include markdown formatting like \`\`\`json.
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
+    let response;
+    let attempts = 0;
+    const maxAttempts = 3;
+    const modelsToTry = ['gemini-2.5-flash'];
 
-    const aiText = response.text;
+    while (attempts < maxAttempts) {
+      const modelName = modelsToTry[attempts % modelsToTry.length];
+      try {
+        console.log(`Calling Gemini with model ${modelName} (attempt ${attempts + 1})...`);
+        response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+        break; // Success
+      } catch (err) {
+        attempts++;
+        console.error(`Gemini call failed with model ${modelName} on attempt ${attempts}:`, err.message);
+        if (attempts >= maxAttempts) {
+          throw err;
+        }
+        console.log('Retrying in 2 seconds...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    let aiText = response.text;
+    if (aiText.includes('```')) {
+      aiText = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
+    }
     const reportData = JSON.parse(aiText);
 
     console.log('Gemini analysis complete. Saving to database...');

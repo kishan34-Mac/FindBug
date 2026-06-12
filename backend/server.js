@@ -7,14 +7,16 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
 
 const { execSync } = require('child_process');
 
-// Ensure Playwright browsers are installed before starting the server
+// Ensure Playwright browsers are installed before starting the server in production
 // This fixes the 'Executable doesn't exist' error on Render
-try {
-  console.log('Installing Playwright Chromium browser...');
-  execSync('npx playwright install chromium', { stdio: 'inherit' });
-  console.log('Playwright Chromium installed successfully.');
-} catch (error) {
-  console.error('Failed to install Playwright browser:', error);
+if (process.env.RENDER === 'true' || process.env.NODE_ENV === 'production') {
+  try {
+    console.log('Installing Playwright Chromium browser...');
+    execSync('npx playwright install chromium', { stdio: 'inherit' });
+    console.log('Playwright Chromium installed successfully.');
+  } catch (error) {
+    console.error('Failed to install Playwright browser:', error);
+  }
 }
 
 const express = require('express');
@@ -27,7 +29,13 @@ const PORT = process.env.PORT || 5000;
 
 const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : '*';
 const corsOptions = {
-  origin: frontendUrl,
+  origin: (origin, callback) => {
+    if (!origin || frontendUrl === '*' || frontendUrl === origin || origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173' || origin === 'http://localhost:3000') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
 };
 app.use(cors(corsOptions));
 app.use(express.json());
