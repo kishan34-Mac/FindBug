@@ -85,25 +85,37 @@ function App() {
     if (appState !== 'loading') return;
 
     const runPipeline = async () => {
+      let progressInterval: NodeJS.Timeout;
+      
       try {
         // Start artificial progress steps
-        const progressInterval = setInterval(() => {
+        progressInterval = setInterval(() => {
           setProgressWidth((prev) => {
             const next = prev + 5;
-            return next > 90 ? 90 : next;
-          });
-          setCurrentStep((prev) => {
-            const step = Math.floor((progressWidth / 100) * pipelineSteps.length);
-            return step >= pipelineSteps.length ? pipelineSteps.length - 1 : step;
+            const bounded = next > 90 ? 90 : next;
+            
+            // Calculate step based on new progress width
+            const newStep = Math.floor((bounded / 100) * pipelineSteps.length);
+            setCurrentStep(newStep >= pipelineSteps.length ? pipelineSteps.length - 1 : newStep);
+            
+            return bounded;
           });
         }, 800);
 
         const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/_/backend' : 'http://localhost:5001');
+        
+        // Add a timeout of 120 seconds (Render cold start can take up to 50s, plus scraping time)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+
         const response = await fetch(`${apiUrl}/api/audit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ url }),
+          signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
         
         const data = await response.json();
         clearInterval(progressInterval);
@@ -132,13 +144,23 @@ function App() {
 
       } catch (error: any) {
         console.error('Audit error:', error);
-        alert(`Error: ${error.message || 'Failed to generate audit report.'}`);
+        
+        let errorMessage = error.message || 'Failed to generate audit report.';
+        if (error.name === 'AbortError') {
+          errorMessage = 'The request timed out. This may happen if the backend is waking up or taking too long to scan the website. Please try again.';
+        }
+        
+        alert(`Error: ${errorMessage}`);
         setAppState('input');
+      } finally {
+        if (progressInterval!) {
+          clearInterval(progressInterval);
+        }
       }
     };
 
     runPipeline();
-  }, [appState]);
+  }, [appState, url]);
 
   const handleNewScan = () => {
     setUrl('');
