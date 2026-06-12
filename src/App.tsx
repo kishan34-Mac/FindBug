@@ -104,9 +104,9 @@ function App() {
 
         const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/_/backend' : 'http://localhost:5001');
         
-        // Add a timeout of 120 seconds (Render cold start can take up to 50s, plus scraping time)
+        // Add a timeout of 5 minutes (300000ms) to allow for Playwright installation on first boot + Render cold starts
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 120000);
+        const timeoutId = setTimeout(() => controller.abort(), 300000);
 
         const response = await fetch(`${apiUrl}/api/audit`, {
           method: 'POST',
