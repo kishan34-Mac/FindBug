@@ -40,6 +40,10 @@ interface Issue {
   reproductionSteps: string;
   recommendedFix: string;
   observationOnly: boolean;
+  rootCause?: string;
+  businessImpact?: string;
+  technicalImpact?: string;
+  estimatedEffort?: string;
 }
 
 interface IssueCategory {
@@ -90,6 +94,23 @@ function App() {
     domContentLoaded: number;
     pageLoadTime: number;
   } | null>(null);
+  const [scores, setScores] = useState<{
+    overallScore: number;
+    securityScore: number;
+    accessibilityScore: number;
+    performanceScore: number;
+    seoScore: number;
+    reliabilityScore: number;
+    mobileScore: number;
+  }>({
+    overallScore: 100,
+    securityScore: 100,
+    accessibilityScore: 100,
+    performanceScore: 100,
+    seoScore: 100,
+    reliabilityScore: 100,
+    mobileScore: 100
+  });
   const [scanDate] = useState(new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -186,6 +207,10 @@ function App() {
                 reproductionSteps: string;
                 recommendedFix: string;
                 observationOnly: boolean;
+                rootCause?: string;
+                businessImpact?: string;
+                technicalImpact?: string;
+                estimatedEffort?: string;
               }
               const addIds = (arr: RawIssue[]) => arr.map((item, i) => ({
                 ...item,
@@ -206,6 +231,15 @@ function App() {
 
               setScreenshot(report.screenshot || null);
               setMetrics(report.performanceMetrics || null);
+              setScores({
+                overallScore: report.overallScore ?? 100,
+                securityScore: report.securityScore ?? 100,
+                accessibilityScore: report.accessibilityScore ?? 100,
+                performanceScore: report.performanceScore ?? 100,
+                seoScore: report.seoScore ?? 100,
+                reliabilityScore: report.reliabilityScore ?? 100,
+                mobileScore: report.mobileScore ?? 100
+              });
 
               setProgressWidth(100);
               setCompletedSteps(pipelineSteps.map((_, i) => i));
@@ -434,7 +468,7 @@ function App() {
                     {totalIssues} Issues
                   </span>
                   <span className="px-3 py-1.5 bg-gradient-to-r from-green-500 to-emerald-500 text-white text-sm font-semibold rounded-lg">
-                    Score: 72/100
+                    Score: {scores.overallScore}/100
                   </span>
                 </div>
 
@@ -459,6 +493,29 @@ function App() {
           </header>
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Premium Scores Grid Dashboard */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+              {[
+                { title: 'Overall Health', score: scores.overallScore, color: 'from-indigo-500 to-purple-600' },
+                { title: 'Security', score: scores.securityScore, color: 'from-emerald-500 to-teal-600' },
+                { title: 'Accessibility', score: scores.accessibilityScore, color: 'from-sky-500 to-blue-600' },
+                { title: 'Performance', score: scores.performanceScore, color: 'from-amber-500 to-orange-600' },
+                { title: 'SEO', score: scores.seoScore, color: 'from-rose-500 to-pink-600' },
+                { title: 'Reliability', score: scores.reliabilityScore, color: 'from-purple-500 to-violet-600' },
+                { title: 'Mobile Viewports', score: scores.mobileScore, color: 'from-cyan-500 to-blue-500' }
+              ].map((item, idx) => (
+                <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col items-center justify-center text-center hover:shadow-md transition-all duration-300">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">{item.title}</span>
+                  <div className={`w-14 h-14 rounded-full flex items-center justify-center bg-gradient-to-br ${item.color} text-white font-extrabold text-lg shadow-sm mb-2`}>
+                    {item.score}
+                  </div>
+                  <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                    <div className={`h-full bg-gradient-to-r ${item.color}`} style={{ width: `${item.score}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
             {/* Visual Screenshot and Performance Metrics Dashboard */}
             {(metrics || screenshot) && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
@@ -685,6 +742,26 @@ function App() {
                                 </div>
                               )}
                               
+                              {/* Phase 14 Root Cause Analysis */}
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-3 p-3 bg-slate-100 rounded-lg border border-slate-200 text-xs">
+                                <div>
+                                  <p className="font-semibold text-slate-600 uppercase tracking-wider mb-1">🔍 Root Cause</p>
+                                  <p className="text-slate-700">{issue.rootCause || 'System runtime mismatch or configuration issue.'}</p>
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-slate-600 uppercase tracking-wider mb-1">💼 Business Impact</p>
+                                  <p className="text-slate-700">{issue.businessImpact || 'Potential user friction and layout shifts on slow connections.'}</p>
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-slate-600 uppercase tracking-wider mb-1">🛠️ Technical Impact</p>
+                                  <p className="text-slate-700">{issue.technicalImpact || 'Generates console alerts and degrades overall system health metrics.'}</p>
+                                </div>
+                              </div>
+                              <div className="text-xs mb-3 flex items-center gap-4 text-slate-500">
+                                <span><span className="font-semibold text-slate-600">Estimated Effort to Fix:</span> {issue.estimatedEffort || '30 minutes'}</span>
+                                <span><span className="font-semibold text-slate-600">Reproducible:</span> {issue.reproducible || 'Yes'}</span>
+                              </div>
+
                               <div className="mt-3 pt-3 border-t border-slate-100 text-xs">
                                 <p className="font-semibold text-emerald-600 uppercase tracking-wider mb-1">Recommended Fix</p>
                                 <p className="text-slate-700 bg-emerald-50/50 p-2.5 rounded border border-emerald-100">{issue.recommendedFix}</p>
@@ -775,6 +852,26 @@ function App() {
                               </div>
                             )}
                             
+                            {/* Phase 14 Root Cause Analysis */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-3 p-3 bg-amber-50/20 rounded-lg border border-amber-200/30 text-xs">
+                              <div>
+                                <p className="font-semibold text-amber-700/80 uppercase tracking-wider mb-1">🔍 Potential Root Cause</p>
+                                <p className="text-slate-700">{issue.rootCause || 'Requires manual analysis of configuration parameters.'}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-amber-700/80 uppercase tracking-wider mb-1">💼 Potential Business Impact</p>
+                                <p className="text-slate-700">{issue.businessImpact || 'Varies based on target deployment settings.'}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-amber-700/80 uppercase tracking-wider mb-1">🛠️ Potential Technical Impact</p>
+                                <p className="text-slate-700">{issue.technicalImpact || 'May restrict execution efficiency and page performance scores.'}</p>
+                              </div>
+                            </div>
+                            <div className="text-xs mb-3 flex items-center gap-4 text-slate-500">
+                              <span><span className="font-semibold text-amber-700/80">Estimated Effort to Fix:</span> {issue.estimatedEffort || '1 hour'}</span>
+                              <span><span className="font-semibold text-amber-700/80">Reproducible:</span> {issue.reproducible || 'Yes'}</span>
+                            </div>
+
                             <div className="mt-3 pt-3 border-t border-amber-100/50 text-xs">
                               <p className="font-semibold text-slate-600 uppercase tracking-wider mb-1">Suggested Review Steps</p>
                               <p className="text-slate-700 bg-slate-100/50 p-2.5 rounded border border-slate-200">{issue.recommendedFix}</p>

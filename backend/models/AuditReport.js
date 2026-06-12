@@ -20,7 +20,12 @@ const IssueSchema = new mongoose.Schema({
   confidence: { type: Number, required: true },
   reproductionSteps: { type: String, required: true },
   recommendedFix: { type: String, required: true },
-  observationOnly: { type: Boolean, default: false }
+  observationOnly: { type: Boolean, default: false },
+  // Phase 14 Fields
+  rootCause: { type: String, default: "" },
+  businessImpact: { type: String, default: "" },
+  technicalImpact: { type: String, default: "" },
+  estimatedEffort: { type: String, default: "" }
 }, { _id: false });
 
 const AuditReportSchema = new mongoose.Schema({
@@ -41,7 +46,15 @@ const AuditReportSchema = new mongoose.Schema({
     ttfb: { type: Number, default: 0 },
     domContentLoaded: { type: Number, default: 0 },
     pageLoadTime: { type: Number, default: 0 }
-  }
+  },
+  // Phase 15 Scores
+  overallScore: { type: Number, default: 100 },
+  securityScore: { type: Number, default: 100 },
+  accessibilityScore: { type: Number, default: 100 },
+  performanceScore: { type: Number, default: 100 },
+  seoScore: { type: Number, default: 100 },
+  reliabilityScore: { type: Number, default: 100 },
+  mobileScore: { type: Number, default: 100 }
 });
 
 module.exports = mongoose.model('AuditReport', AuditReportSchema);

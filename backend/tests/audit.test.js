@@ -194,3 +194,52 @@ describe('Server-Side Quality Gate', () => {
     expect(result.functionalBugs[0].issue).toBe('Console TypeError');
   });
 });
+
+describe('Report Scoring Calculation', () => {
+  const { calculateScores } = require('../utils/auditRunner');
+
+  it('should calculate perfect scores if no issues are detected', () => {
+    const reportData = {
+      frontendIssues: [],
+      backendIssues: [],
+      functionalBugs: [],
+      responsivenessIssues: [],
+      performanceIssues: [],
+      seoIssues: [],
+      accessibilityIssues: []
+    };
+    const scraped = {
+      vitals: { fcp: 1000, lcp: 1500, cls: 0.01, tbt: 10 }
+    };
+
+    const scores = calculateScores(reportData, scraped);
+    expect(scores.overallScore).toBe(100);
+    expect(scores.securityScore).toBe(100);
+    expect(scores.performanceScore).toBe(100);
+  });
+
+  it('should apply correct deductions for critical and high severity issues', () => {
+    const reportData = {
+      frontendIssues: [],
+      backendIssues: [],
+      functionalBugs: [
+        { issue: 'Crashed Thread', severity: 'Critical' }
+      ],
+      responsivenessIssues: [
+        { issue: 'Overflow', severity: 'High' }
+      ],
+      performanceIssues: [],
+      seoIssues: [],
+      accessibilityIssues: []
+    };
+    const scraped = {
+      vitals: { fcp: 1000, lcp: 1500, cls: 0.01, tbt: 10 }
+    };
+
+    const scores = calculateScores(reportData, scraped);
+    // reliability starts at 100, critical functional bug deducts 20 -> 80
+    expect(scores.reliabilityScore).toBe(80);
+    // mobile starts at 100, high responsiveness bug deducts 15 -> 85
+    expect(scores.mobileScore).toBe(85);
+  });
+});

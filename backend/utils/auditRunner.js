@@ -604,7 +604,8 @@ async function executeAudit(url, progressCallback) {
     // --- STEP: AI Synthesis ---
     logger.info("STEP START: AI Synthesis");
     const prompt = `
-      Act as a Principal QA Engineer, Security Auditor, and Performance Engineer. I have performed a real-time audit on the URL: ${url}.
+      Act as an elite QA task force consisting of a Principal QA Engineer, Security Auditor, Performance Engineer, and Software Architect.
+      I have performed a real-time audit on the URL: ${url}.
       Here is the raw verified evidence collected directly from the page:
       ${JSON.stringify(scrapedFacts, null, 2)}
 
@@ -629,6 +630,10 @@ async function executeAudit(url, progressCallback) {
          - "reproductionSteps": Step-by-step instructions to reproduce this issue.
          - "recommendedFix": Actionable engineering steps to resolve the issue.
          - "observationOnly": true or false (Set to true if confidence is less than 100% or requires manual check).
+         - "rootCause": Root cause analysis detailing why this issue occurred based on the logs/framework indicators.
+         - "businessImpact": The operational or revenue impact this issue has on the business.
+         - "technicalImpact": The technical severity, performance impact, or code stability degradation.
+         - "estimatedEffort": Estimated engineering effort to resolve (e.g., "1 hour", "1-2 days", "30 minutes").
 
       Required JSON format:
       {
@@ -652,6 +657,16 @@ async function executeAudit(url, progressCallback) {
       performanceIssues: [],
       seoIssues: [],
       accessibilityIssues: []
+    };
+
+    let scores = {
+      overallScore: 100,
+      securityScore: 100,
+      accessibilityScore: 100,
+      performanceScore: 100,
+      seoScore: 100,
+      reliabilityScore: 100,
+      mobileScore: 100
     };
 
     try {
@@ -705,6 +720,9 @@ async function executeAudit(url, progressCallback) {
       reportData = generateFallbackReport(scrapedFacts);
     }
 
+    // Programmatic Score Calculation (100% evidence-backed Phase 15)
+    scores = calculateScores(reportData, scrapedFacts);
+
     progressCallback(90);
 
     // --- STEP: Report Persistence ---
@@ -720,7 +738,14 @@ async function executeAudit(url, progressCallback) {
       seoIssues: reportData.seoIssues,
       accessibilityIssues: reportData.accessibilityIssues,
       screenshot: screenshotBase64,
-      performanceMetrics
+      performanceMetrics,
+      overallScore: scores.overallScore,
+      securityScore: scores.securityScore,
+      accessibilityScore: scores.accessibilityScore,
+      performanceScore: scores.performanceScore,
+      seoScore: scores.seoScore,
+      reliabilityScore: scores.reliabilityScore,
+      mobileScore: scores.mobileScore
     });
 
     const savedReport = await withTimeout(newReport.save(), 15000);
@@ -736,6 +761,88 @@ async function executeAudit(url, progressCallback) {
     }
     throw error;
   }
+}
+
+// Calculate 100% Evidence-Backed Report Scores
+function calculateScores(reportData, scraped) {
+  const scores = {
+    securityScore: 100,
+    accessibilityScore: 100,
+    performanceScore: 100,
+    seoScore: 100,
+    reliabilityScore: 100,
+    mobileScore: 100,
+    overallScore: 100
+  };
+
+  const severityDeductions = { Critical: 20, High: 15, Medium: 8, Low: 3 };
+
+  // 1. Security Score
+  // Base deductions on backend/frontend issues matching security headers, cookies, mixed content
+  let securityIssuesCount = 0;
+  reportData.backendIssues.forEach(issue => {
+    const isSec = issue.issue.toLowerCase().includes('csp') || issue.issue.toLowerCase().includes('security') || issue.issue.toLowerCase().includes('cookie') || issue.issue.toLowerCase().includes('mixed');
+    if (isSec) {
+      scores.securityScore -= (severityDeductions[issue.severity] || 5);
+      securityIssuesCount++;
+    }
+  });
+  scores.securityScore = Math.max(0, scores.securityScore);
+
+  // 2. Accessibility Score
+  reportData.accessibilityIssues.forEach(issue => {
+    scores.accessibilityScore -= (severityDeductions[issue.severity] || 5);
+  });
+  scores.accessibilityScore = Math.max(0, scores.accessibilityScore);
+
+  // 3. Performance Score
+  // Deduct based on performance issues + raw vitals
+  reportData.performanceIssues.forEach(issue => {
+    scores.performanceScore -= (severityDeductions[issue.severity] || 5);
+  });
+  const v = scraped.vitals;
+  if (v.fcp > 3000) scores.performanceScore -= 10;
+  if (v.lcp > 4000) scores.performanceScore -= 15;
+  if (v.cls > 0.25) scores.performanceScore -= 10;
+  if (v.tbt > 300) scores.performanceScore -= 10;
+  scores.performanceScore = Math.max(0, scores.performanceScore);
+
+  // 4. SEO Score
+  reportData.seoIssues.forEach(issue => {
+    scores.seoScore -= (severityDeductions[issue.severity] || 5);
+  });
+  scores.seoScore = Math.max(0, scores.seoScore);
+
+  // 5. Reliability Score
+  // Deduct for JS exceptions & Console errors
+  reportData.functionalBugs.forEach(issue => {
+    scores.reliabilityScore -= (severityDeductions[issue.severity] || 5);
+  });
+  reportData.frontendIssues.forEach(issue => {
+    if (issue.issue.toLowerCase().includes('error') || issue.issue.toLowerCase().includes('crash')) {
+      scores.reliabilityScore -= (severityDeductions[issue.severity] || 5);
+    }
+  });
+  scores.reliabilityScore = Math.max(0, scores.reliabilityScore);
+
+  // 6. Mobile Score
+  reportData.responsivenessIssues.forEach(issue => {
+    scores.mobileScore -= (severityDeductions[issue.severity] || 5);
+  });
+  scores.mobileScore = Math.max(0, scores.mobileScore);
+
+  // 7. Overall Score: Average of all scores
+  scores.overallScore = Math.round(
+    (scores.securityScore +
+      scores.accessibilityScore +
+      scores.performanceScore +
+      scores.seoScore +
+      scores.reliabilityScore +
+      scores.mobileScore) /
+      6
+  );
+
+  return scores;
 }
 
 // Strict Server-Side Quality Gate Filter
@@ -838,6 +945,12 @@ function runQualityGate(parsed, scraped) {
         issue.reproductionSteps = issue.reproductionSteps || "N/A";
         issue.recommendedFix = issue.recommendedFix || "N/A";
 
+        // Phase 14 Root Cause Fields
+        issue.rootCause = issue.rootCause || "System configuration or runtime execution error detected in frontend telemetry.";
+        issue.businessImpact = issue.businessImpact || "Degraded user confidence and minor layout instability in specific viewport frames.";
+        issue.technicalImpact = issue.technicalImpact || "Throws warnings and raises potential script rendering execution latency.";
+        issue.estimatedEffort = issue.estimatedEffort || "30 minutes";
+
         verified[cat].push(issue);
       }
     });
@@ -875,7 +988,11 @@ function generateFallbackReport(scraped) {
         confidence: 100,
         reproductionSteps: '1. Open the page in a browser.\n2. Open developer console.\n3. The script exception is printed immediately on load.',
         recommendedFix: 'Examine the stack trace, check for undefined object dereferencing, and load scripts safely.',
-        observationOnly: false
+        observationOnly: false,
+        rootCause: 'Uncaught runtime script exception due to null variable reference or module resolving failure.',
+        businessImpact: 'Complete failure of execution block, potentially blocking user sign-ups or payments.',
+        technicalImpact: 'Halts script execution and crashes the page runtime thread.',
+        estimatedEffort: '1-2 hours'
       });
     });
   }
@@ -897,7 +1014,11 @@ function generateFallbackReport(scraped) {
         confidence: 100,
         reproductionSteps: '1. Open the page.\n2. Review developer console errors.',
         recommendedFix: 'Review error cause in console statement and ensure proper execution pathways.',
-        observationOnly: false
+        observationOnly: false,
+        rootCause: 'Browser log capture. Unhandled function output warnings or external SDK warnings.',
+        businessImpact: 'Minor friction in performance telemetry and tracking systems.',
+        technicalImpact: 'Increases console error noise, reducing debugging visibility.',
+        estimatedEffort: '30 minutes'
       });
     });
   }
@@ -920,7 +1041,11 @@ function generateFallbackReport(scraped) {
         confidence: 100,
         reproductionSteps: '1. Inspect network requests on load.\n2. Search for the failed URL.',
         recommendedFix: 'Ensure target resource is online and origin CORS policies allow access.',
-        observationOnly: false
+        observationOnly: false,
+        rootCause: 'Network request failure. Endpoint timed out or CORS check rejected request headers.',
+        businessImpact: 'Causes broken UI elements or missing API responses, causing user drop-offs.',
+        technicalImpact: 'Reduces server-side availability metrics and network stability.',
+        estimatedEffort: '1 hour'
       });
     });
   }
@@ -943,7 +1068,11 @@ function generateFallbackReport(scraped) {
         confidence: 100,
         reproductionSteps: `1. View page source.\n2. Locate DOM element: ${issue.evidence}`,
         recommendedFix: 'Update element tags to meet WCAG standards.',
-        observationOnly: false
+        observationOnly: false,
+        rootCause: 'DOM element markup structure missing mandatory screen-reader labels or description flags.',
+        businessImpact: 'Fails accessibility law compliance and blocks visually impaired users.',
+        technicalImpact: 'Reduces DOM semantic tree layout quality.',
+        estimatedEffort: '45 minutes'
       });
     });
   }
@@ -966,7 +1095,11 @@ function generateFallbackReport(scraped) {
         confidence: 100,
         reproductionSteps: '1. Inspect page head tag settings.',
         recommendedFix: 'Add correct tags to page headers.',
-        observationOnly: false
+        observationOnly: false,
+        rootCause: 'Missing index headers, meta tag definition variables, canonical bindings, or robots configurations.',
+        businessImpact: 'Reduces search placement visibility and domain rankings in search pages.',
+        technicalImpact: 'Prevents crawlers from properly parsing content mappings.',
+        estimatedEffort: '30 minutes'
       });
     });
   }
@@ -978,5 +1111,6 @@ module.exports = {
   executeAudit,
   withTimeout,
   runQualityGate,
-  generateFallbackReport
+  generateFallbackReport,
+  calculateScores
 };
